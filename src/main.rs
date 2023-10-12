@@ -3,10 +3,17 @@
 use bevy::{ecs::query, prelude::*, sprite::MaterialMesh2dBundle};
 use rayon::prelude::*;
 use std::num;
+use std::time::Instant;
 
 const PARTICLECOUNT: u32 = 1000;
-const PARTICLEREPULSION: f32 = 1.0;
-const PARTICLEMAXREPULSION: f32 = 1.0;
+const PARTICLEREPULSION: f32 = 0.005;
+const PARTICLEMAXREPULSION: f32 = 0.3;
+const PARTICLETERMINALVELOCITY: f32 = 100.0;
+
+//const BOXDIMS: [f32; 4] = [-100., 100., -300., -200.]; // Left, Right, Bottom, Top
+const BOXSIZE: [f32; 2] = [1200., 700.]; // Width, Height
+const BOXBOUNCINESS: f32 = 0.8;
+const GRAVITY: f32 = 0.0; //0.16; // 9.81 / 60.0;
 
 // Create a new type for a particle of water with velocity and position
 #[derive(Copy, Clone, Debug, Component)]
@@ -22,24 +29,31 @@ fn setup_circles(
 ) {
     commands.spawn(Camera2dBundle::default());
 
+    // Quad
+    commands.spawn(MaterialMesh2dBundle {
+        mesh: meshes
+            .add(shape::Quad::new(Vec2::new(BOXSIZE[0], BOXSIZE[1])).into())
+            .into(),
+        material: materials.add(ColorMaterial::from(Color::LIME_GREEN)),
+        transform: Transform::from_translation(Vec3::new(0., 0., -1.)),
+        ..default()
+    });
+
     for i in 1..PARTICLECOUNT {
         // Circle
         commands
             .spawn(MaterialMesh2dBundle {
                 mesh: meshes.add(shape::Circle::new(5.).into()).into(),
                 material: materials.add(ColorMaterial::from(Color::BLUE)),
-                transform: Transform::from_translation(Vec3::new(1., 1., 0.)),
+                transform: Transform::from_translation(Vec3::new(0., 0., 0.)),
                 ..default()
             })
             .insert(Particle {
-                position: (1., 1.),
+                position: (0., 0.),
                 velocity: (0., 0.),
             });
     }
 }
-
-const BOXDIMS: [i32; 4] = [-100, 100, -300, 500]; // Left, Right, Bottom, Top
-const BOXBOUNCINESS: f32 = 0.9;
 
 fn main() {
     App::new()
@@ -50,7 +64,7 @@ fn main() {
         .run();
 }
 
-fn initialize_positions(mut particleQuery: Query<&mut Particle>) {
+fn initialize_positions(mut particleQuery: Query<&mut Particle, With<Particle>>) {
     let mut index = 0;
     for x in 0..((PARTICLECOUNT as f32).sqrt() as u16) {
         for y in 0..((PARTICLECOUNT as f32).sqrt() as u16) {
@@ -62,15 +76,24 @@ fn initialize_positions(mut particleQuery: Query<&mut Particle>) {
     }
 }
 
-fn update(mut transfrom_query: Query<&mut Transform>, mut particle_query: Query<&mut Particle>)
+fn update(
+    mut transfrom_query: Query<&mut Transform, With<Particle>>,
+    mut particle_query: Query<&mut Particle>,
+)
 // Called every frame
 {
     let mut particles = particle_query.iter_mut().collect::<Vec<_>>();
     let mut transforms = transfrom_query.iter_mut().collect::<Vec<_>>();
 
+    let start_time = Instant::now();
     particles.par_iter_mut().for_each(|particle| {
         simulation_step(particle, &transforms);
     });
+    println!(
+        "Simulation step took {} nanoseconds or {} fps",
+        start_time.elapsed().as_nanos(),
+        1_000_000_000 / start_time.elapsed().as_nanos(),
+    );
 
     set_circle_positions(particles, transforms);
 }
@@ -87,21 +110,23 @@ fn set_circle_positions(
 
 fn simulation_step(particle: &mut Particle, other_particles: &Vec<Mut<'_, Transform>>) {
     gravity_step(particle);
-    bounce_step(particle);
     repulsion_step(particle, other_particles);
-    velocity_step(particle);
+    bounce_step(particle);
+    box_repulsion_step(particle);
+    cap_velocity(particle);
+    apply_velocity_step(particle);
 }
 
 fn gravity_step(particle: &mut Particle) {
-    particle.velocity.1 -= 0.1;
+    particle.velocity.1 -= GRAVITY;
 }
 
 fn bounce_step(particle: &mut Particle) {
-    if BOXDIMS[0] as f32 > particle.position.0 || particle.position.0 > BOXDIMS[1] as f32 {
-        particle.velocity.0 = -particle.velocity.0 * BOXBOUNCINESS;
+    if particle.position.0.abs() > BOXSIZE[0] / 2. {
+        particle.velocity.0 = (-particle.velocity.0) * BOXBOUNCINESS;
     }
-    if BOXDIMS[2] as f32 > particle.position.1 || particle.position.1 > BOXDIMS[3] as f32 {
-        particle.velocity.1 = -particle.velocity.1 * BOXBOUNCINESS;
+    if particle.position.1.abs() > BOXSIZE[1] / 2. {
+        particle.velocity.1 = (-particle.velocity.1) * BOXBOUNCINESS;
     }
 }
 
@@ -110,16 +135,21 @@ fn repulsion_step(particle: &mut Particle, other_particles: &Vec<Mut<'_, Transfo
         let dx = particle.position.0 - other_particle.translation.x;
         let dy = particle.position.1 - other_particle.translation.y;
         let distance = (dx * dx + dy * dy).sqrt();
-        if distance < 10. {
+        if distance < 100. {
             particle.velocity.0 +=
-                (dx / distance).min(PARTICLEMAXREPULSION) * PARTICLEREPULSION as f32;
+                (dx / distance.powi(2)).min(PARTICLEMAXREPULSION) * PARTICLEREPULSION as f32;
             particle.velocity.1 +=
-                (dy / distance).min(PARTICLEMAXREPULSION) * PARTICLEREPULSION as f32;
+                (dy / distance.powi(2)).min(PARTICLEMAXREPULSION) * PARTICLEREPULSION as f32;
         }
     });
 }
 
-fn velocity_step(particle: &mut Particle) {
+fn apply_velocity_step(particle: &mut Particle) {
     particle.position.0 += particle.velocity.0;
     particle.position.1 += particle.velocity.1;
+}
+
+fn cap_velocity(particle: &mut Particle) {
+    particle.velocity.0 = particle.velocity.0.min(PARTICLETERMINALVELOCITY);
+    particle.velocity.1 = particle.velocity.1.min(PARTICLETERMINALVELOCITY);
 }
