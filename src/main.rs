@@ -112,7 +112,6 @@ fn simulation_step(particle: &mut Particle, other_particles: &Vec<Mut<'_, Transf
     gravity_step(particle);
     repulsion_step(particle, other_particles);
     bounce_step(particle);
-    box_repulsion_step(particle);
     cap_velocity(particle);
     apply_velocity_step(particle);
 }
