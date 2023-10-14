@@ -5,18 +5,19 @@ use rayon::prelude::*;
 use std::num;
 use std::time::Instant;
 
-const PARTICLECOUNT: u32 = 10000;
-const PARTICLEREPULSION: f32 = 0.15;
-const PARTICLEMAXREPULSION: f32 = 1.0;
+const PARTICLECOUNT: u32 = 1000;
+const PARTICLEREPULSION: f32 = 0.3;
+const PARTICLEATTRACTION: f32 = 0.0035;
+const PARTICLEMAXREPULSION: f32 = 2.0;
 const PARTICLETERMINALVELOCITY: f32 = 10.0;
-const PARTICLESPHEREOFINFLUENCE: f32 = 100.0;
+const PARTICLESPHEREOFINFLUENCE: f32 = 30.0;
 
 //const BOXDIMS: [f32; 4] = [-100., 100., -300., -200.]; // Left, Right, Bottom, Top
 const BOXSIZE: [f32; 2] = [1200., 700.]; // Width, Height
 const BOXBOUNCINESS: f32 = 0.8;
 const BOXREPULSION: f32 = 0.3;
-const BOXMAXREPULSION: f32 = 1.0;
-const GRAVITY: f32 = 0.32; // 9.81 / 60.0;
+const BOXMAXREPULSION: f32 = 0.5;
+const GRAVITY: f32 = 0.16; // 0.32; // 9.81 / 60.0;
 
 // Create a new type for a particle of water with velocity and position
 #[derive(Copy, Clone, Debug, Component)]
@@ -128,19 +129,25 @@ fn gravity_step(particle: &mut Particle) {
 fn bounce_step(particle: &mut Particle) {
     if particle.position.0.abs() > BOXSIZE[0] / 2. {
         particle.velocity.0 = (-particle.velocity.0) * BOXBOUNCINESS;
+
+        particle.position = nearest_point_on_rectangle(particle.position.into(), BOXSIZE).into();
     }
     if particle.position.1.abs() > BOXSIZE[1] / 2. {
         particle.velocity.1 = (-particle.velocity.1) * BOXBOUNCINESS;
+
+        particle.position = nearest_point_on_rectangle(particle.position.into(), BOXSIZE).into();
     }
 }
 
 fn box_repulsion_step(particle: &mut Particle) {
     let nearest_rectangle_point =
         nearest_point_on_rectangle([particle.position.0, particle.position.1], BOXSIZE);
+
     let dx = particle.position.0 - nearest_rectangle_point[0];
     let dy = particle.position.1 - nearest_rectangle_point[1];
+
     let distance = (dx * dx + dy * dy).sqrt();
-    // Check if the particle is not itself
+
     particle.velocity.0 += (dx / distance.powi(2)).min(BOXMAXREPULSION) * BOXREPULSION as f32;
     particle.velocity.1 += (dy / distance.powi(2)).min(BOXMAXREPULSION) * BOXREPULSION as f32;
 }
@@ -149,13 +156,15 @@ fn particle_repulsion_step(particle: &mut Particle, other_particles: &Vec<Mut<'_
     other_particles.iter().for_each(|other_particle| {
         let dx = particle.position.0 - other_particle.translation.x;
         let dy = particle.position.1 - other_particle.translation.y;
+
         let distance = (dx * dx + dy * dy).sqrt();
+
         // Check if the particle is not itself
         if distance != 0. && distance < PARTICLESPHEREOFINFLUENCE {
-            particle.velocity.0 +=
-                (dx / distance.powi(2)).min(PARTICLEMAXREPULSION) * PARTICLEREPULSION as f32;
-            particle.velocity.1 +=
-                (dy / distance.powi(2)).min(PARTICLEMAXREPULSION) * PARTICLEREPULSION as f32;
+            let force = (1.0 / (distance.powi(2)) - PARTICLEATTRACTION).min(PARTICLEMAXREPULSION)
+                * PARTICLEREPULSION as f32;
+            particle.velocity.0 += dx * force;
+            particle.velocity.1 += dy * force;
         }
     });
 }
