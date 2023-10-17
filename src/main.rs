@@ -25,6 +25,8 @@ const GRAVITY: f32 = 1.28; // 0.32; // 9.81 / 60.0;
 
 const BOXSEGMENTS: usize = 30; // the number of boxes in each dimension
 
+const DELTATIME: f32 = 1.0 / 60.0;
+
 // Create a new type for a particle of water with velocity and position
 #[derive(Copy, Clone, Debug, Component)]
 struct Particle {
@@ -147,12 +149,12 @@ fn simulation_step(
 }
 
 fn drag_step(particle: &mut Particle) {
-    particle.velocity.0 *= 1.0 - PARTICLEDRAG;
-    particle.velocity.1 *= 1.0 - PARTICLEDRAG;
+    particle.velocity.0 *= 1.0 - (PARTICLEDRAG * DELTATIME);
+    particle.velocity.1 *= 1.0 - (PARTICLEDRAG * DELTATIME);
 }
 
 fn gravity_step(particle: &mut Particle) {
-    particle.velocity.1 -= GRAVITY;
+    particle.velocity.1 -= GRAVITY * DELTATIME;
 }
 
 fn bounce_step(particle: &mut Particle) {
@@ -178,8 +180,10 @@ fn box_repulsion_step(particle: &mut Particle) {
 
     let distance = (dx * dx + dy * dy).sqrt();
 
-    particle.velocity.0 += (dx / distance.powi(2)).min(BOXMAXREPULSION) * BOXREPULSION as f32;
-    particle.velocity.1 += (dy / distance.powi(2)).min(BOXMAXREPULSION) * BOXREPULSION as f32;
+    particle.velocity.0 +=
+        (dx / distance.powi(2)).min(BOXMAXREPULSION) * BOXREPULSION as f32 * DELTATIME;
+    particle.velocity.1 +=
+        (dy / distance.powi(2)).min(BOXMAXREPULSION) * BOXREPULSION as f32 * DELTATIME;
 }
 
 fn particle_repulsion_step(
@@ -219,16 +223,19 @@ fn particle_repulsion_step(
                         // Check if the particle is not itself
                         if distance < PARTICLESPHEREOFINFLUENCE {
                             if distance < 0.01 {
-                                particle.velocity.0 +=
-                                    rand::thread_rng().gen::<f32>() * PARTICLEMAXREPULSION as f32;
-                                particle.velocity.1 +=
-                                    rand::thread_rng().gen::<f32>() * PARTICLEMAXREPULSION as f32;
+                                particle.velocity.0 += rand::thread_rng().gen::<f32>()
+                                    * PARTICLEMAXREPULSION
+                                    * DELTATIME;
+                                particle.velocity.1 += rand::thread_rng().gen::<f32>()
+                                    * PARTICLEMAXREPULSION
+                                    * DELTATIME;
                             } else {
                                 let force = ((1.0
                                     / (distance * PARTICLEREPULSIONDISTANCE).powi(2))
                                     - PARTICLEATTRACTION)
                                     .min(PARTICLEMAXREPULSION)
-                                    * PARTICLEREPULSION as f32;
+                                    * PARTICLEREPULSION as f32
+                                    * DELTATIME;
                                 particle.velocity.0 += dx * force;
                                 particle.velocity.1 += dy * force;
                             }
@@ -240,8 +247,8 @@ fn particle_repulsion_step(
 }
 
 fn apply_velocity_step(particle: &mut Particle) {
-    particle.position.0 += particle.velocity.0;
-    particle.position.1 += particle.velocity.1;
+    particle.position.0 += particle.velocity.0 * DELTATIME;
+    particle.position.1 += particle.velocity.1 * DELTATIME;
 }
 
 fn cap_velocity(particle: &mut Particle) {
