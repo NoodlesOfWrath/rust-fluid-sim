@@ -7,19 +7,20 @@ use rayon::prelude::*;
 use std::num;
 use std::time::Instant;
 
-const PARTICLECOUNT: u32 = 4000;
-const PARTICLEREPULSION: f32 = 0.3;
-const PARTICLEATTRACTION: f32 = 0.0035;
-const PARTICLEMAXREPULSION: f32 = 2.0;
+const PARTICLECOUNT: u32 = 4000; // the number of particles to simulate
+const PARTICLEREPULSION: f32 = 0.15;
+const PARTICLEATTRACTION: f32 = 0.016; // the attraction force between particles aka the y offset of the repulsion function
+const PARTICLEMAXREPULSION: f32 = 10.0; // the maximum repulsion force that can be applied to a particle by another particle
 const PARTICLETERMINALVELOCITY: f32 = 10.0;
-const PARTICLESPHEREOFINFLUENCE: f32 = 30.0;
+const PARTICLESPHEREOFINFLUENCE: f32 = 30.0; // any particle within this distance will be affected by the repulsion
+const PARTICLEREPULSIONDISTANCE: f32 = 0.1; // the width of the graph of the repulsion function
 
 //const BOXDIMS: [f32; 4] = [-100., 100., -300., -200.]; // Left, Right, Bottom, Top
 const BOXSIZE: [f32; 2] = [1200., 700.]; // Width, Height
 const BOXBOUNCINESS: f32 = 0.8;
-const BOXREPULSION: f32 = 0.3;
+const BOXREPULSION: f32 = 1.0;
 const BOXMAXREPULSION: f32 = 0.5;
-const GRAVITY: f32 = 0.16; // 0.32; // 9.81 / 60.0;
+const GRAVITY: f32 = 0.64; // 0.32; // 9.81 / 60.0;
 
 // Create a new type for a particle of water with velocity and position
 #[derive(Copy, Clone, Debug, Component)]
@@ -86,8 +87,8 @@ fn initialize_positions(mut particleQuery: Query<&mut Particle, With<Particle>>)
     for x in 0..((PARTICLECOUNT as f32).sqrt() as u16) {
         for y in 0..((PARTICLECOUNT as f32).sqrt() as u16) {
             let mut particle = particleQuery.iter_mut().nth(index).unwrap();
-            particle.position.0 = (((x * 20) as f32) - 500.).into();
-            particle.position.1 = (((y * 20) as f32) - 250.).into();
+            particle.position.0 = (((x * 5) as f32) - 500.).into();
+            particle.position.1 = (((y * 5) as f32) - 250.).into();
             index += 1;
         }
     }
@@ -96,7 +97,6 @@ fn initialize_positions(mut particleQuery: Query<&mut Particle, With<Particle>>)
 fn update(
     mut transfrom_query: Query<&mut Transform, With<Particle>>,
     mut particle_query: Query<&mut Particle>,
-    mut material_query: Query<&mut Handle<StandardMaterial>>,
     mut particle_boxes: Query<&mut ParticleBoxes>,
 )
 // Called every frame
@@ -109,26 +109,14 @@ fn update(
         .map(|x| x.0.clone())
         .unwrap();
 
-    let start_time = Instant::now();
     sort_into_boxes(&transforms, &mut particle_boxes);
-    println!(
-        "Sorting into boxes took {} nanoseconds or {} fps",
-        start_time.elapsed().as_nanos(),
-        1_000_000_000 / start_time.elapsed().as_nanos(),
-    );
 
-    let start_time = Instant::now();
     particles
         .par_iter_mut()
         .enumerate()
         .for_each(|(i, particle)| {
             simulation_step(particle, &transforms, &particle_boxes, i);
         });
-    println!(
-        "Simulation step took {} nanoseconds or {} fps",
-        start_time.elapsed().as_nanos(),
-        1_000_000_000 / start_time.elapsed().as_nanos(),
-    );
 
     set_circle_positions(particles, transforms);
 }
@@ -164,13 +152,9 @@ fn gravity_step(particle: &mut Particle) {
 fn bounce_step(particle: &mut Particle) {
     if particle.position.0.abs() > BOXSIZE[0] / 2. {
         particle.velocity.0 = (-particle.velocity.0) * BOXBOUNCINESS;
-
-        particle.position = nearest_point_on_rectangle(particle.position.into(), BOXSIZE).into();
     }
     if particle.position.1.abs() > BOXSIZE[1] / 2. {
         particle.velocity.1 = (-particle.velocity.1) * BOXBOUNCINESS;
-
-        particle.position = nearest_point_on_rectangle(particle.position.into(), BOXSIZE).into();
     }
 }
 
@@ -211,7 +195,7 @@ fn particle_repulsion_step(
                 .iter()
                 .for_each(|other_particle_index| {
                     if *other_particle_index != index {
-                        let other_particle = other_particles[*other_particle_index].clone();
+                        let other_particle = other_particles[*other_particle_index].clone(); // could probably be optimized
                         let dx = particle.position.0 - other_particle.translation.x;
                         let dy = particle.position.1 - other_particle.translation.y;
 
@@ -219,7 +203,8 @@ fn particle_repulsion_step(
 
                         // Check if the particle is not itself
                         if distance < PARTICLESPHEREOFINFLUENCE {
-                            let force = (1.0 / (distance.powi(2)) - PARTICLEATTRACTION)
+                            let force = ((1.0 / (distance * PARTICLEREPULSIONDISTANCE).powi(2))
+                                - PARTICLEATTRACTION)
                                 .min(PARTICLEMAXREPULSION)
                                 * PARTICLEREPULSION as f32;
                             particle.velocity.0 += dx * force;
