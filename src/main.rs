@@ -3,6 +3,7 @@
 use bevy::ecs::bundle;
 use bevy::ecs::query::WorldQuery;
 use bevy::{ecs::query, prelude::*, sprite::MaterialMesh2dBundle};
+use rand::prelude::*;
 use rayon::prelude::*;
 use std::num;
 use std::time::Instant;
@@ -217,12 +218,20 @@ fn particle_repulsion_step(
 
                         // Check if the particle is not itself
                         if distance < PARTICLESPHEREOFINFLUENCE {
-                            let force = ((1.0 / (distance * PARTICLEREPULSIONDISTANCE).powi(2))
-                                - PARTICLEATTRACTION)
-                                .min(PARTICLEMAXREPULSION)
-                                * PARTICLEREPULSION as f32;
-                            particle.velocity.0 += dx * force;
-                            particle.velocity.1 += dy * force;
+                            if distance < 0.01 {
+                                particle.velocity.0 +=
+                                    rand::thread_rng().gen::<f32>() * PARTICLEMAXREPULSION as f32;
+                                particle.velocity.1 +=
+                                    rand::thread_rng().gen::<f32>() * PARTICLEMAXREPULSION as f32;
+                            } else {
+                                let force = ((1.0
+                                    / (distance * PARTICLEREPULSIONDISTANCE).powi(2))
+                                    - PARTICLEATTRACTION)
+                                    .min(PARTICLEMAXREPULSION)
+                                    * PARTICLEREPULSION as f32;
+                                particle.velocity.0 += dx * force;
+                                particle.velocity.1 += dy * force;
+                            }
                         }
                     }
                 });
