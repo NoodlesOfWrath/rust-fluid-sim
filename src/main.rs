@@ -14,12 +14,13 @@ const PARTICLEMAXREPULSION: f32 = 10.0; // the maximum repulsion force that can 
 const PARTICLETERMINALVELOCITY: f32 = 10.0;
 const PARTICLESPHEREOFINFLUENCE: f32 = 30.0; // any particle within this distance will be affected by the repulsion
 const PARTICLEREPULSIONDISTANCE: f32 = 0.1; // the width of the graph of the repulsion function
+const PARTICLEDRAG: f32 = 0.01; // the amount of force applied to the particle to slow it down
 
 const BOXSIZE: [f32; 2] = [1200., 700.]; // Width, Height
-const BOXBOUNCINESS: f32 = 0.8;
+const BOXBOUNCINESS: f32 = 0.9;
 const BOXREPULSION: f32 = 1.0;
-const BOXMAXREPULSION: f32 = 0.5;
-const GRAVITY: f32 = 0.64; // 0.32; // 9.81 / 60.0;
+const BOXMAXREPULSION: f32 = 2.0;
+const GRAVITY: f32 = 1.28; // 0.32; // 9.81 / 60.0;
 
 const BOXSEGMENTS: usize = 30; // the number of boxes in each dimension
 
@@ -135,12 +136,18 @@ fn simulation_step(
     particle_boxes: &[[Vec<usize>; BOXSEGMENTS]; BOXSEGMENTS],
     index: usize,
 ) {
+    drag_step(particle);
     gravity_step(particle);
     particle_repulsion_step(particle, other_particles, index, particle_boxes);
     box_repulsion_step(particle);
     bounce_step(particle);
     cap_velocity(particle);
     apply_velocity_step(particle);
+}
+
+fn drag_step(particle: &mut Particle) {
+    particle.velocity.0 *= 1.0 - PARTICLEDRAG;
+    particle.velocity.1 *= 1.0 - PARTICLEDRAG;
 }
 
 fn gravity_step(particle: &mut Particle) {
@@ -181,7 +188,7 @@ fn particle_repulsion_step(
     particle_boxes: &[[Vec<usize>; BOXSEGMENTS]; BOXSEGMENTS],
 ) {
     // find the 5 boxes that are around the particle
-    let [box_x, box_y] = box_indices(particle.position.0, particle.position.1);
+    let [box_x, box_y] = get_box_indices(particle.position.0, particle.position.1);
     let boxes_to_check = [
         [box_x, box_y],
         [box_x + 1, box_y],
@@ -229,8 +236,12 @@ fn apply_velocity_step(particle: &mut Particle) {
 }
 
 fn cap_velocity(particle: &mut Particle) {
-    particle.velocity.0 = particle.velocity.0.min(PARTICLETERMINALVELOCITY);
-    particle.velocity.1 = particle.velocity.1.min(PARTICLETERMINALVELOCITY);
+    // get the magnitude of the velocity
+    let velocity_magnitude = (particle.velocity.0.powi(2) + particle.velocity.1.powi(2)).sqrt();
+    if velocity_magnitude > PARTICLETERMINALVELOCITY {
+        particle.velocity.0 *= PARTICLETERMINALVELOCITY / velocity_magnitude;
+        particle.velocity.1 *= PARTICLETERMINALVELOCITY / velocity_magnitude;
+    }
 }
 
 fn nearest_point_on_rectangle(point: [f32; 2], rectangle_size: [f32; 2]) -> [f32; 2] {
@@ -275,13 +286,13 @@ fn sort_into_boxes(
             let x = particle.translation.x;
             let y = particle.translation.y;
 
-            let [x_index, y_index] = box_indices(x, y);
+            let [x_index, y_index] = get_box_indices(x, y);
 
             particle_boxes[x_index as usize][y_index as usize].push(particle_index);
         });
 }
 
-fn box_indices(x: f32, y: f32) -> [i32; 2] {
+fn get_box_indices(x: f32, y: f32) -> [i32; 2] {
     let x_index = ((x as i32 / (BOXSIZE[0] / (BOXSEGMENTS / 2) as f32) as i32)
         + BOXSEGMENTS as i32 / 2)
         .min(BOXSEGMENTS as i32 - 1)
