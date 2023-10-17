@@ -21,7 +21,7 @@ const BOXREPULSION: f32 = 1.0;
 const BOXMAXREPULSION: f32 = 0.5;
 const GRAVITY: f32 = 0.64; // 0.32; // 9.81 / 60.0;
 
-const BOXSEGMENTS: usize = 40; // the number of boxes in each dimension
+const BOXSEGMENTS: usize = 30; // the number of boxes in each dimension
 
 // Create a new type for a particle of water with velocity and position
 #[derive(Copy, Clone, Debug, Component)]
@@ -157,6 +157,11 @@ fn bounce_step(particle: &mut Particle) {
 }
 
 fn box_repulsion_step(particle: &mut Particle) {
+    // check if the particle is outside the box
+    if particle.position.0.abs() > BOXSIZE[0] / 2. || particle.position.1.abs() > BOXSIZE[1] / 2. {
+        return;
+    }
+
     let nearest_rectangle_point =
         nearest_point_on_rectangle([particle.position.0, particle.position.1], BOXSIZE);
 
