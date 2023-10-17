@@ -7,7 +7,7 @@ use rayon::prelude::*;
 use std::num;
 use std::time::Instant;
 
-const PARTICLECOUNT: u32 = 4000; // the number of particles to simulate
+const PARTICLECOUNT: u32 = 8000; // the number of particles to simulate
 const PARTICLEREPULSION: f32 = 0.15;
 const PARTICLEATTRACTION: f32 = 0.016; // the attraction force between particles aka the y offset of the repulsion function
 const PARTICLEMAXREPULSION: f32 = 10.0; // the maximum repulsion force that can be applied to a particle by another particle
@@ -15,12 +15,13 @@ const PARTICLETERMINALVELOCITY: f32 = 10.0;
 const PARTICLESPHEREOFINFLUENCE: f32 = 30.0; // any particle within this distance will be affected by the repulsion
 const PARTICLEREPULSIONDISTANCE: f32 = 0.1; // the width of the graph of the repulsion function
 
-//const BOXDIMS: [f32; 4] = [-100., 100., -300., -200.]; // Left, Right, Bottom, Top
 const BOXSIZE: [f32; 2] = [1200., 700.]; // Width, Height
 const BOXBOUNCINESS: f32 = 0.8;
 const BOXREPULSION: f32 = 1.0;
 const BOXMAXREPULSION: f32 = 0.5;
 const GRAVITY: f32 = 0.64; // 0.32; // 9.81 / 60.0;
+
+const BOXSEGMENTS: usize = 40; // the number of boxes in each dimension
 
 // Create a new type for a particle of water with velocity and position
 #[derive(Copy, Clone, Debug, Component)]
@@ -30,7 +31,7 @@ struct Particle {
 }
 
 #[derive(Clone, Component)]
-struct ParticleBoxes([[Vec<usize>; 4]; 4]); // Stores the indices of the particles in the boxes
+struct ParticleBoxes([[Vec<usize>; BOXSEGMENTS]; BOXSEGMENTS]); // Stores the indices of the particles in the boxes
 
 fn setup_circles(
     mut commands: Commands,
@@ -65,12 +66,9 @@ fn setup_circles(
     }
 
     // make an object to store the particle boxes
-    commands.spawn(ParticleBoxes([
-        [vec![], vec![], vec![], vec![]],
-        [vec![], vec![], vec![], vec![]],
-        [vec![], vec![], vec![], vec![]],
-        [vec![], vec![], vec![], vec![]],
-    ]));
+    commands.spawn(ParticleBoxes(std::array::from_fn(|_| {
+        std::array::from_fn(|_| vec![])
+    })));
 }
 
 fn main() {
@@ -86,7 +84,7 @@ fn initialize_positions(mut particleQuery: Query<&mut Particle, With<Particle>>)
     let mut index = 0;
     for x in 0..((PARTICLECOUNT as f32).sqrt() as u16) {
         for y in 0..((PARTICLECOUNT as f32).sqrt() as u16) {
-            let mut particle = particleQuery.iter_mut().nth(index).unwrap();
+            let mut particle = particleQuery.iter_mut().nth(index).unwrap(); // extremely inefficient but only run once
             particle.position.0 = (((x * 5) as f32) - 500.).into();
             particle.position.1 = (((y * 5) as f32) - 250.).into();
             index += 1;
@@ -134,7 +132,7 @@ fn set_circle_positions(
 fn simulation_step(
     particle: &mut Particle,
     other_particles: &Vec<Mut<'_, Transform>>,
-    particle_boxes: &[[Vec<usize>; 4]; 4],
+    particle_boxes: &[[Vec<usize>; BOXSEGMENTS]; BOXSEGMENTS],
     index: usize,
 ) {
     gravity_step(particle);
@@ -175,7 +173,7 @@ fn particle_repulsion_step(
     particle: &mut Particle,
     other_particles: &Vec<Mut<'_, Transform>>,
     index: usize,
-    particle_boxes: &[[Vec<usize>; 4]; 4],
+    particle_boxes: &[[Vec<usize>; BOXSEGMENTS]; BOXSEGMENTS],
 ) {
     // find the 5 boxes that are around the particle
     let [box_x, box_y] = box_indices(particle.position.0, particle.position.1);
@@ -188,7 +186,11 @@ fn particle_repulsion_step(
     ];
 
     boxes_to_check.iter().for_each(|[box_x, box_y]| {
-        if *box_x > 3 || *box_x < 0 || *box_y > 3 || *box_y < 0 {
+        if *box_x > BOXSEGMENTS as i32 - 1
+            || *box_x < 0
+            || *box_y > BOXSEGMENTS as i32 - 1
+            || *box_y < 0
+        {
             // if the index is outside the box don't do anything
         } else {
             particle_boxes[*box_x as usize][*box_y as usize]
@@ -254,7 +256,10 @@ fn nearest_point_on_rectangle(point: [f32; 2], rectangle_size: [f32; 2]) -> [f32
     }
 }
 
-fn sort_into_boxes(particles: &Vec<Mut<'_, Transform>>, particle_boxes: &mut [[Vec<usize>; 4]; 4]) {
+fn sort_into_boxes(
+    particles: &Vec<Mut<'_, Transform>>,
+    particle_boxes: &mut [[Vec<usize>; BOXSEGMENTS]; BOXSEGMENTS],
+) {
     clear_boxes(particle_boxes);
 
     // had to use a for loop because the rayon library doesn't support iterators with indices
@@ -271,31 +276,19 @@ fn sort_into_boxes(particles: &Vec<Mut<'_, Transform>>, particle_boxes: &mut [[V
         });
 }
 
-fn box_indices(x: f32, y: f32) -> [i8; 2] {
-    let x_index = if x <= -BOXSIZE[0] / 2. {
-        0
-    } else if x < 0. {
-        1
-    } else if x < BOXSIZE[0] / 2. {
-        2
-    } else {
-        3
-    };
-
-    let y_index = if y <= -BOXSIZE[1] / 2. {
-        0
-    } else if y < 0. {
-        1
-    } else if y < BOXSIZE[1] / 2. {
-        2
-    } else {
-        3
-    };
-
+fn box_indices(x: f32, y: f32) -> [i32; 2] {
+    let x_index = ((x as i32 / (BOXSIZE[0] / (BOXSEGMENTS / 2) as f32) as i32)
+        + BOXSEGMENTS as i32 / 2)
+        .min(BOXSEGMENTS as i32 - 1)
+        .max(0);
+    let y_index = ((y as i32 / (BOXSIZE[1] / (BOXSEGMENTS / 2) as f32) as i32)
+        + BOXSEGMENTS as i32 / 2)
+        .min(BOXSEGMENTS as i32 - 1)
+        .max(0);
     return [x_index, y_index];
 }
 
-fn clear_boxes(particle_boxes: &mut [[Vec<usize>; 4]; 4]) {
+fn clear_boxes(particle_boxes: &mut [[Vec<usize>; BOXSEGMENTS]; BOXSEGMENTS]) {
     particle_boxes.iter_mut().for_each(|x| {
         x.par_iter_mut().for_each(|y| {
             y.clear();
