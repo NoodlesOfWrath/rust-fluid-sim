@@ -8,8 +8,8 @@ use rayon::prelude::*;
 use std::num;
 use std::time::Instant;
 
-const PARTICLECOUNT: u32 = 8000; // the number of particles to simulate
-const PARTICLEREPULSION: f32 = 0.15;
+const PARTICLECOUNT: u32 = 32000; // the number of particles to simulate
+const PARTICLEREPULSION: f32 = 0.04;
 const PARTICLEATTRACTION: f32 = 0.016; // the attraction force between particles aka the y offset of the repulsion function
 const PARTICLEMAXREPULSION: f32 = 10.0; // the maximum repulsion force that can be applied to a particle by another particle
 const PARTICLETERMINALVELOCITY: f32 = 10.0;
@@ -19,13 +19,14 @@ const PARTICLEDRAG: f32 = 0.01; // the amount of force applied to the particle t
 
 const BOXSIZE: [f32; 2] = [1200., 700.]; // Width, Height
 const BOXBOUNCINESS: f32 = 0.9;
-const BOXREPULSION: f32 = 1.0;
-const BOXMAXREPULSION: f32 = 2.0;
+const BOXREPULSION: f32 = 10.0;
+const BOXMAXREPULSION: f32 = 10.0;
 const GRAVITY: f32 = 1.28; // 0.32; // 9.81 / 60.0;
 
 const BOXSEGMENTS: usize = 30; // the number of boxes in each dimension
 
-const DELTATIME: f32 = 1.0 / 60.0;
+const DELTATIME: f32 = 1.0 / 2.0;
+const STEPSPERFRAME: u32 = 1; // the number of simulation steps to run per frame !!! Not stable for anything but 1 !!!
 
 // Create a new type for a particle of water with velocity and position
 #[derive(Copy, Clone, Debug, Component)]
@@ -80,7 +81,7 @@ fn main() {
         .add_plugins(DefaultPlugins)
         .add_systems(PreStartup, setup_circles)
         .add_systems(Startup, initialize_positions)
-        .add_systems(FixedUpdate, update)
+        .add_systems(Update, update)
         .run();
 }
 
@@ -89,8 +90,8 @@ fn initialize_positions(mut particleQuery: Query<&mut Particle, With<Particle>>)
     for x in 0..((PARTICLECOUNT as f32).sqrt() as u16) {
         for y in 0..((PARTICLECOUNT as f32).sqrt() as u16) {
             let mut particle = particleQuery.iter_mut().nth(index).unwrap(); // extremely inefficient but only run once
-            particle.position.0 = (((x * 5) as f32) - 500.).into();
-            particle.position.1 = (((y * 5) as f32) - 250.).into();
+            particle.position.0 = (((x * 3) as f32) - 500.).into();
+            particle.position.1 = (((y * 3) as f32) - 250.).into();
             index += 1;
         }
     }
@@ -111,14 +112,16 @@ fn update(
         .map(|x| x.0.clone())
         .unwrap();
 
-    sort_into_boxes(&transforms, &mut particle_boxes);
+    for _ in 0..STEPSPERFRAME {
+        sort_into_boxes(&transforms, &mut particle_boxes);
 
-    particles
-        .par_iter_mut()
-        .enumerate()
-        .for_each(|(i, particle)| {
-            simulation_step(particle, &transforms, &particle_boxes, i);
-        });
+        particles
+            .par_iter_mut()
+            .enumerate()
+            .for_each(|(i, particle)| {
+                simulation_step(particle, &transforms, &particle_boxes, i);
+            });
+    }
 
     set_circle_positions(particles, transforms);
 }
@@ -200,6 +203,10 @@ fn particle_repulsion_step(
         [box_x - 1, box_y],
         [box_x, box_y + 1],
         [box_x, box_y - 1],
+        [box_x + 1, box_y + 1],
+        [box_x - 1, box_y + 1],
+        [box_x + 1, box_y - 1],
+        [box_x - 1, box_y - 1],
     ];
 
     boxes_to_check.iter().for_each(|[box_x, box_y]| {
