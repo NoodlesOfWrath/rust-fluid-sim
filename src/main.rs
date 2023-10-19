@@ -6,7 +6,7 @@ use bevy::{ecs::query, prelude::*, sprite::MaterialMesh2dBundle};
 use rand::prelude::*;
 use rayon::prelude::*;
 use std::num;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 const PARTICLECOUNT: u32 = 32000; // the number of particles to simulate
 const PARTICLEREPULSION: f32 = 0.04;
@@ -25,8 +25,11 @@ const GRAVITY: f32 = 1.28; // 0.32; // 9.81 / 60.0;
 
 const BOXSEGMENTS: usize = 30; // the number of boxes in each dimension
 
-const DELTATIME: f32 = 1.0 / 2.0;
+const TIMESTEP: f32 = 1.0 / 2.0; // the amount of time to simulate per frame
 const STEPSPERFRAME: u32 = 1; // the number of simulation steps to run per frame !!! Not stable for anything but 1 !!!
+const DELTATIME: f32 = TIMESTEP / STEPSPERFRAME as f32; // the amount of time to simulate per step
+
+static mut TIMEFORSTEPS: [f32; 8] = [0., 0., 0., 0., 0., 0., 0., 0.];
 
 // Create a new type for a particle of water with velocity and position
 #[derive(Copy, Clone, Debug, Component)]
@@ -59,7 +62,7 @@ fn setup_circles(
         // Circle
         commands
             .spawn(MaterialMesh2dBundle {
-                mesh: meshes.add(shape::Circle::new(2.).into()).into(),
+                mesh: meshes.add(shape::Circle::new(1.).into()).into(),
                 material: materials.add(ColorMaterial::from(Color::BLUE)),
                 transform: Transform::from_translation(Vec3::new(0., 0., 0.)),
                 ..default()
@@ -123,7 +126,7 @@ fn update(
             });
     }
 
-    set_circle_positions(particles, transforms);
+    set_circle_positions(particles, transforms); // only time transforms is updated meaning steps per frame doesn't work.
 }
 
 fn set_circle_positions(
@@ -190,6 +193,7 @@ fn box_repulsion_step(particle: &mut Particle) {
         (dy / distance.powi(2)).min(BOXMAXREPULSION) * BOXREPULSION as f32 * DELTATIME;
 }
 
+#[inline(never)]
 fn particle_repulsion_step(
     particle: &mut Particle,
     other_particles: &Vec<Mut<'_, Transform>>,
@@ -218,38 +222,40 @@ fn particle_repulsion_step(
         {
             // if the index is outside the box don't do anything
         } else {
+            let mut total_force: [f32; 2] = [0., 0.];
+            let influence_squared = PARTICLESPHEREOFINFLUENCE.powi(2);
+            let repulsion_distance_squared = PARTICLEREPULSIONDISTANCE.powi(2);
             particle_boxes[*box_x as usize][*box_y as usize]
                 .iter()
                 .for_each(|other_particle_index| {
                     if *other_particle_index != index {
-                        let other_particle = other_particles[*other_particle_index].clone(); // could probably be optimized
+                        let other_particle = &other_particles[*other_particle_index];
                         let dx = particle.position[0] - other_particle.translation.x;
                         let dy = particle.position[1] - other_particle.translation.y;
 
-                        let distance = (dx * dx + dy * dy).sqrt();
+                        let distance_squared = dx.powi(2) + dy.powi(2);
 
                         // Check if the particle is not itself
-                        if distance < PARTICLESPHEREOFINFLUENCE {
-                            if distance < 0.01 {
-                                particle.velocity[0] += rand::thread_rng().gen::<f32>()
-                                    * PARTICLEMAXREPULSION
-                                    * DELTATIME;
-                                particle.velocity[1] += rand::thread_rng().gen::<f32>()
-                                    * PARTICLEMAXREPULSION
-                                    * DELTATIME;
+                        if distance_squared < influence_squared {
+                            if distance_squared < 0.01 {
+                                total_force[0] +=
+                                    rand::thread_rng().gen::<f32>() * PARTICLEMAXREPULSION;
+                                total_force[1] +=
+                                    rand::thread_rng().gen::<f32>() * PARTICLEMAXREPULSION;
                             } else {
                                 let force = ((1.0
-                                    / (distance * PARTICLEREPULSIONDISTANCE).powi(2))
+                                    / (distance_squared * repulsion_distance_squared))
                                     - PARTICLEATTRACTION)
-                                    .min(PARTICLEMAXREPULSION)
-                                    * PARTICLEREPULSION as f32
-                                    * DELTATIME;
-                                particle.velocity[0] += dx * force;
-                                particle.velocity[1] += dy * force;
+                                    .min(PARTICLEMAXREPULSION);
+
+                                total_force[0] += dx * force;
+                                total_force[1] += dy * force;
                             }
                         }
                     }
                 });
+            particle.velocity[0] += total_force[0] * PARTICLEREPULSION as f32 * DELTATIME;
+            particle.velocity[1] += total_force[1] * PARTICLEREPULSION as f32 * DELTATIME;
         }
     });
 }
@@ -321,6 +327,7 @@ fn get_box_indices(x: f32, y: f32) -> [i32; 2] {
         + BOXSEGMENTS as i32 / 2)
         .min(BOXSEGMENTS as i32 - 1)
         .max(0);
+
     let y_index = ((y as i32 / (BOXSIZE[1] / (BOXSEGMENTS / 2) as f32) as i32)
         + BOXSEGMENTS as i32 / 2)
         .min(BOXSEGMENTS as i32 - 1)
