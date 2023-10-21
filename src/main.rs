@@ -4,13 +4,10 @@ use bevy::ecs::query::WorldQuery;
 use bevy::{ecs::query, prelude::*, sprite::MaterialMesh2dBundle};
 use nalgebra::Point2;
 use rand::prelude::*;
-use rand::prelude::*;
 use rayon::prelude::*;
-use rstar::{Point, PointDistance, RTree, RTreeObject, AABB};
-use std::num;
-use std::time::{Duration, Instant};
+use rstar::{PointDistance, RTree, RTreeObject, AABB};
 
-const PARTICLECOUNT: u32 = 16000; // the number of particles to simulate
+const PARTICLECOUNT: u32 = 32000; // the number of particles to simulate
 const PARTICLEREPULSION: f32 = 0.04; //0.04;
 const PARTICLEATTRACTION: f32 = 0.016; // the attraction force between particles aka the y offset of the repulsion function
 const PARTICLEMAXREPULSION: f32 = 10.0; // the maximum repulsion force that can be applied to a particle by another particle
@@ -25,8 +22,6 @@ const BOXREPULSION: f32 = 10.0;
 const BOXMAXREPULSION: f32 = 10.0;
 const GRAVITY: f32 = 1.28; // 0.32; // 9.81 / 60.0;
 
-const BOXSEGMENTS: usize = 12; // the number of boxes in each dimension
-
 const TIMESTEP: f32 = 1.0 / 2.0; // the amount of time to simulate per frame
 const STEPSPERFRAME: u32 = 1; // the number of simulation steps to run per frame !!! Not stable for anything but 1 !!!
 const DELTATIME: f32 = TIMESTEP / STEPSPERFRAME as f32; // the amount of time to simulate per step
@@ -36,10 +31,38 @@ const DELTATIME: f32 = TIMESTEP / STEPSPERFRAME as f32; // the amount of time to
 struct Particle {
     position: Point2<f32>,
     velocity: Point2<f32>,
+    index: u32,
 }
 
-#[derive(Clone, Component)]
-struct ParticleBoxes([[Vec<usize>; BOXSEGMENTS]; BOXSEGMENTS]); // Stores the indices of the particles in the boxes
+// implement RTreeObject for Point2<f32>
+impl RTreeObject for Particle {
+    type Envelope = AABB<[f32; 2]>;
+
+    fn envelope(&self) -> Self::Envelope {
+        AABB::from_corners(
+            [
+                self.position.x - (2.0_f32.sqrt() * PARTICLESPHEREOFINFLUENCE),
+                self.position.y - (2.0_f32.sqrt() * PARTICLESPHEREOFINFLUENCE),
+            ],
+            [
+                self.position.x + (2.0_f32.sqrt() * PARTICLESPHEREOFINFLUENCE),
+                self.position.y + (2.0_f32.sqrt() * PARTICLESPHEREOFINFLUENCE),
+            ],
+        )
+    }
+}
+
+impl PointDistance for Particle {
+    fn distance_2(&self, point: &[f32; 2]) -> f32 {
+        let dx = self.position.x - point[0];
+        let dy = self.position.y - point[1];
+        dx * dx + dy * dy // returning squared distance is required
+    }
+
+    fn contains_point(&self, point: &[f32; 2]) -> bool {
+        self.distance_2(point) <= PARTICLESPHEREOFINFLUENCE * PARTICLESPHEREOFINFLUENCE
+    }
+}
 
 fn setup_circles(
     mut commands: Commands,
@@ -70,13 +93,9 @@ fn setup_circles(
             .insert(Particle {
                 position: Point2::new(0.0, 0.0),
                 velocity: Point2::new(0.0, 0.0),
+                index: i,
             });
     }
-
-    // make an object to store the particle boxes
-    commands.spawn(ParticleBoxes(std::array::from_fn(|_| {
-        std::array::from_fn(|_| vec![])
-    })));
 }
 
 fn main() {
@@ -103,26 +122,32 @@ fn initialize_positions(mut particleQuery: Query<&mut Particle, With<Particle>>)
 fn update(
     mut transfrom_query: Query<&mut Transform, With<Particle>>,
     mut particle_query: Query<&mut Particle>,
-    mut particle_boxes: Query<&mut ParticleBoxes>,
 )
 // Called every frame
 {
     let mut particles = particle_query.iter_mut().collect::<Vec<_>>();
-    let mut transforms = transfrom_query.iter_mut().collect::<Vec<_>>();
-    let mut particle_boxes = particle_boxes
-        .iter_mut()
-        .next()
-        .map(|x| x.0.clone())
-        .unwrap();
+
+    let transforms = transfrom_query.iter_mut().collect::<Vec<_>>();
 
     for _ in 0..STEPSPERFRAME {
-        sort_into_boxes(&transforms, &mut particle_boxes);
+        // make a copy of the particles to read from in Vec<Particle>
+        let read_only_particles: Vec<Particle> = particles
+            .iter()
+            .map(|particle| Particle {
+                position: particle.position,
+                velocity: particle.velocity,
+                index: particle.index,
+            })
+            .collect();
+
+        // format the particles into an RTree
+        let particle_tree = RTree::bulk_load(read_only_particles);
 
         particles
             .par_iter_mut()
             .enumerate()
             .for_each(|(i, particle)| {
-                simulation_step(particle, &transforms, &particle_boxes, i);
+                simulation_step(particle, &particle_tree);
             });
     }
 
@@ -139,15 +164,10 @@ fn set_circle_positions(
     });
 }
 
-fn simulation_step(
-    particle: &mut Particle,
-    other_particles: &Vec<Mut<'_, Transform>>,
-    particle_boxes: &[[Vec<usize>; BOXSEGMENTS]; BOXSEGMENTS],
-    index: usize,
-) {
+fn simulation_step(particle: &mut Particle, particle_tree: &RTree<Particle>) {
     drag_step(particle);
     gravity_step(particle);
-    particle_repulsion_step(particle, other_particles, index, particle_boxes);
+    particle_repulsion_step(particle, particle_tree);
     box_repulsion_step(particle);
     bounce_step(particle);
     cap_velocity(particle);
@@ -193,69 +213,37 @@ fn box_repulsion_step(particle: &mut Particle) {
 }
 
 #[inline(never)]
-fn particle_repulsion_step(
-    particle: &mut Particle,
-    other_particles: &Vec<Mut<'_, Transform>>,
-    index: usize,
-    particle_boxes: &[[Vec<usize>; BOXSEGMENTS]; BOXSEGMENTS],
-) {
-    // find the 5 boxes that are around the particle
-    let [box_x, box_y] = get_box_indices(particle.position.x, particle.position.y);
-    let boxes_to_check = [
-        [box_x, box_y],
-        [box_x + 1, box_y],
-        [box_x - 1, box_y],
-        [box_x, box_y + 1],
-        [box_x, box_y - 1],
-        [box_x + 1, box_y + 1],
-        [box_x - 1, box_y + 1],
-        [box_x + 1, box_y - 1],
-        [box_x - 1, box_y - 1],
-    ];
+fn particle_repulsion_step(particle: &mut Particle, particle_tree: &RTree<Particle>) {
+    let mut total_force = [0.0, 0.0];
+    let influence_squared = PARTICLESPHEREOFINFLUENCE.powi(2);
+    let repulsion_distance_squared = PARTICLEREPULSIONDISTANCE.powi(2);
+    for other_particle in
+        particle_tree.locate_all_at_point(&[particle.position.x, particle.position.y])
+    {
+        // make sure the particle is not itself
+        if particle.index != other_particle.index {
+            let dx = particle.position.x - other_particle.position.x;
+            let dy = particle.position.y - other_particle.position.y;
 
-    boxes_to_check.iter().for_each(|[box_x, box_y]| {
-        if !(*box_x > BOXSEGMENTS as i32 - 1
-            || *box_x < 0
-            || *box_y > BOXSEGMENTS as i32 - 1
-            || *box_y < 0)
-        {
-            let mut total_force: [f32; 2] = [0., 0.];
-            let influence_squared = PARTICLESPHEREOFINFLUENCE.powi(2);
-            let repulsion_distance_squared = PARTICLEREPULSIONDISTANCE.powi(2);
+            let distance_squared = dx * dx + dy * dy;
 
-            particle_boxes[*box_x as usize][*box_y as usize]
-                .iter()
-                .for_each(|other_particle_index| {
-                    // make sure the particle is not itself
-                    if *other_particle_index != index {
-                        let other_particle = &other_particles[*other_particle_index];
-                        let dx = particle.position.x - other_particle.translation.x;
-                        let dy = particle.position.y - other_particle.translation.y;
+            if distance_squared < influence_squared {
+                if distance_squared < 0.01 {
+                    total_force[0] += rand::thread_rng().gen::<f32>() * PARTICLEMAXREPULSION;
+                    total_force[1] += rand::thread_rng().gen::<f32>() * PARTICLEMAXREPULSION;
+                } else {
+                    let force = ((1.0 / (distance_squared * repulsion_distance_squared))
+                        - PARTICLEATTRACTION)
+                        .min(PARTICLEMAXREPULSION);
 
-                        let distance_squared = dx.powi(2) + dy.powi(2);
-
-                        if distance_squared < influence_squared {
-                            if distance_squared < 0.01 {
-                                total_force[0] +=
-                                    rand::thread_rng().gen::<f32>() * PARTICLEMAXREPULSION;
-                                total_force[1] +=
-                                    rand::thread_rng().gen::<f32>() * PARTICLEMAXREPULSION;
-                            } else {
-                                let force = ((1.0
-                                    / (distance_squared * repulsion_distance_squared))
-                                    - PARTICLEATTRACTION)
-                                    .min(PARTICLEMAXREPULSION);
-
-                                total_force[0] += dx * force;
-                                total_force[1] += dy * force;
-                            }
-                        }
-                    }
-                });
-            particle.velocity.x += total_force[0] * PARTICLEREPULSION as f32 * DELTATIME;
-            particle.velocity.y += total_force[1] * PARTICLEREPULSION as f32 * DELTATIME;
+                    total_force[0] += dx * force;
+                    total_force[1] += dy * force;
+                }
+            }
         }
-    });
+    }
+    particle.velocity.x += total_force[0] * PARTICLEREPULSION * DELTATIME;
+    particle.velocity.y += total_force[1] * PARTICLEREPULSION * DELTATIME;
 }
 
 fn apply_velocity_step(particle: &mut Particle) {
@@ -298,42 +286,4 @@ fn nearest_point_on_rectangle(point: [f32; 2], rectangle_size: [f32; 2]) -> [f32
     } else {
         return [point[0], half_height];
     }
-}
-
-fn sort_into_boxes(
-    particles: &Vec<Mut<'_, Transform>>,
-    particle_boxes: &mut [[Vec<usize>; BOXSEGMENTS]; BOXSEGMENTS],
-) {
-    clear_boxes(particle_boxes);
-
-    particles
-        .iter()
-        .enumerate()
-        .for_each(|(particle_index, particle)| {
-            let x = particle.translation.x;
-            let y = particle.translation.y;
-
-            let [x_index, y_index] = get_box_indices(x, y);
-
-            particle_boxes[x_index as usize][y_index as usize].push(particle_index);
-        });
-}
-
-fn get_box_indices(x: f32, y: f32) -> [i32; 2] {
-    let x_index = ((x as i32 / (BOXSIZE[0] / BOXSEGMENTS as f32) as i32) + BOXSEGMENTS as i32 / 2)
-        .min(BOXSEGMENTS as i32 - 1)
-        .max(0);
-
-    let y_index = ((y as i32 / (BOXSIZE[1] / BOXSEGMENTS as f32) as i32) + BOXSEGMENTS as i32 / 2)
-        .min(BOXSEGMENTS as i32 - 1)
-        .max(0);
-    return [x_index, y_index];
-}
-
-fn clear_boxes(particle_boxes: &mut [[Vec<usize>; BOXSEGMENTS]; BOXSEGMENTS]) {
-    particle_boxes.iter_mut().for_each(|x| {
-        x.par_iter_mut().for_each(|y| {
-            y.clear();
-        });
-    });
 }
