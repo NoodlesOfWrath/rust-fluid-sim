@@ -1,14 +1,15 @@
 //! Simple particle simulation in Rust
 use bevy::ecs::bundle;
 use bevy::ecs::query::WorldQuery;
+use bevy::window::PrimaryWindow;
 use bevy::{ecs::query, prelude::*, sprite::MaterialMesh2dBundle};
 use nalgebra::Point2;
 use rand::prelude::*;
 use rayon::prelude::*;
 use rstar::{PointDistance, RTree, RTreeObject, AABB};
 
-const PARTICLECOUNT: u32 = 32000; // the number of particles to simulate
-const PARTICLEREPULSION: f32 = 0.04; //0.04;
+const PARTICLECOUNT: u32 = 8000; // the number of particles to simulate
+const PARTICLEREPULSION: f32 = 0.03; //0.04;
 const PARTICLEATTRACTION: f32 = 0.016; // the attraction force between particles aka the y offset of the repulsion function
 const PARTICLEMAXREPULSION: f32 = 10.0; // the maximum repulsion force that can be applied to a particle by another particle
 const PARTICLETERMINALVELOCITY: f32 = 10.0;
@@ -22,10 +23,11 @@ const BOXREPULSION: f32 = 10.0;
 const BOXMAXREPULSION: f32 = 10.0;
 const GRAVITY: f32 = 1.28; // 0.32; // 9.81 / 60.0;
 
-
-const TIMESTEP: f32 = 1.0 / 2.0; // the amount of time to simulate per frame
-const STEPSPERFRAME: u32 = 1; // the number of simulation steps to run per frame
+const TIMESTEP: f32 = 1. / 2.; // the amount of time to simulate per frame
+const STEPSPERFRAME: u32 = 1;
 const DELTATIME: f32 = TIMESTEP / STEPSPERFRAME as f32; // the amount of time to simulate per step
+
+const MOUSEATTRACTFORCE: f32 = 1.0; // the amount of force to attract the particles with
 
 // Create a new type for a particle of water with velocity and position
 #[derive(Copy, Clone, Debug, Component)]
@@ -113,8 +115,8 @@ fn initialize_positions(mut particleQuery: Query<&mut Particle, With<Particle>>)
     for x in 0..((PARTICLECOUNT as f32).sqrt() as u16) {
         for y in 0..((PARTICLECOUNT as f32).sqrt() as u16) {
             let mut particle = particleQuery.iter_mut().nth(index).unwrap(); // extremely inefficient but only run once
-            particle.position.x = (((x * 3) as f32) - 500.).into();
-            particle.position.y = (((y * 3) as f32) - 250.).into();
+            particle.position.x = (((x * 2) as f32) - 500.).into();
+            particle.position.y = (((y * 2) as f32) - 250.).into();
             index += 1;
         }
     }
@@ -123,6 +125,8 @@ fn initialize_positions(mut particleQuery: Query<&mut Particle, With<Particle>>)
 fn update(
     mut transfrom_query: Query<&mut Transform, With<Particle>>,
     mut particle_query: Query<&mut Particle>,
+    window_query: Query<&Window, With<PrimaryWindow>>,
+    buttons: Res<Input<MouseButton>>,
 )
 // Called every frame
 {
@@ -131,6 +135,16 @@ fn update(
     let transforms = transfrom_query.iter_mut().collect::<Vec<_>>();
 
     for _ in 0..STEPSPERFRAME {
+        let mut position = Vec2::new(0., 0.);
+        if buttons.pressed(MouseButton::Left) || buttons.pressed(MouseButton::Right) {
+            // Left Button is being held down
+            if let Some(cursor_position) = window_query.single().cursor_position() {
+                let mut cursor_position_2 = cursor_position + Vec2::new(-600., -350.);
+                cursor_position_2.y = -cursor_position_2.y;
+                position = cursor_position_2;
+            }
+        }
+
         // make a copy of the particles to read from in Vec<Particle>
         let read_only_particles: Vec<Particle> = particles
             .iter()
@@ -144,12 +158,14 @@ fn update(
         // format the particles into an RTree
         let particle_tree = RTree::bulk_load(read_only_particles);
 
-        particles
-            .par_iter_mut()
-            .enumerate()
-            .for_each(|(i, particle)| {
-                simulation_step(particle, &particle_tree);
-            });
+        particles.par_iter_mut().for_each(|particle| {
+            simulation_step(
+                particle,
+                &particle_tree,
+                &position,
+                buttons.pressed(MouseButton::Left),
+            );
+        });
     }
 
     set_circle_positions(particles, transforms); // only time transforms is updated meaning steps per frame doesn't work.
@@ -165,9 +181,15 @@ fn set_circle_positions(
     });
 }
 
-fn simulation_step(particle: &mut Particle, particle_tree: &RTree<Particle>) {
+fn simulation_step(
+    particle: &mut Particle,
+    particle_tree: &RTree<Particle>,
+    cursor_position: &Vec2,
+    is_left_button_pressed: bool,
+) {
     drag_step(particle);
     gravity_step(particle);
+    cursor_attraction_step(particle, cursor_position, is_left_button_pressed);
     particle_repulsion_step(particle, particle_tree);
     box_repulsion_step(particle);
     bounce_step(particle);
@@ -216,35 +238,61 @@ fn box_repulsion_step(particle: &mut Particle) {
 #[inline(never)]
 fn particle_repulsion_step(particle: &mut Particle, particle_tree: &RTree<Particle>) {
     let mut total_force = [0.0, 0.0];
-    let influence_squared = PARTICLESPHEREOFINFLUENCE.powi(2);
     let repulsion_distance_squared = PARTICLEREPULSIONDISTANCE.powi(2);
-    for other_particle in
-        particle_tree.locate_all_at_point(&[particle.position.x, particle.position.y])
-    {
+    let particles = particle_tree.locate_all_at_point(&[particle.position.x, particle.position.y]);
+    for other_particle in particles {
         // make sure the particle is not itself
         if particle.index != other_particle.index {
             let dx = particle.position.x - other_particle.position.x;
             let dy = particle.position.y - other_particle.position.y;
 
-            let distance_squared = dx * dx + dy * dy;
+            let distance_squared = dx.powi(2) + dy.powi(2);
 
-            if distance_squared < influence_squared {
-                if distance_squared < 0.01 {
-                    total_force[0] += rand::thread_rng().gen::<f32>() * PARTICLEMAXREPULSION;
-                    total_force[1] += rand::thread_rng().gen::<f32>() * PARTICLEMAXREPULSION;
-                } else {
-                    let force = ((1.0 / (distance_squared * repulsion_distance_squared))
-                        - PARTICLEATTRACTION)
-                        .min(PARTICLEMAXREPULSION);
+            if distance_squared < 0.05 {
+                total_force[0] += rand::thread_rng().gen::<f32>() * PARTICLEMAXREPULSION;
+                total_force[1] += rand::thread_rng().gen::<f32>() * PARTICLEMAXREPULSION;
+            } else {
+                let force = ((1.0 / (distance_squared * repulsion_distance_squared))
+                    - PARTICLEATTRACTION)
+                    .min(PARTICLEMAXREPULSION);
 
-                    total_force[0] += dx * force;
-                    total_force[1] += dy * force;
-                }
+                total_force[0] += dx * force;
+                total_force[1] += dy * force;
             }
         }
     }
     particle.velocity.x += total_force[0] * PARTICLEREPULSION * DELTATIME;
     particle.velocity.y += total_force[1] * PARTICLEREPULSION * DELTATIME;
+}
+
+fn cursor_attraction_step(
+    particle: &mut Particle,
+    cursor_position: &Vec2,
+    is_left_button_pressed: bool,
+) {
+    if is_left_button_pressed && *cursor_position != Vec2::new(0., 0.) {
+        // Left Button is being held down
+        let dx = particle.position.x - cursor_position.x as f32;
+        let dy = particle.position.y - cursor_position.y as f32;
+
+        let distance_squared = dx.powi(2) + dy.powi(2);
+
+        let force = (distance_squared * MOUSEATTRACTFORCE.powi(2)).min(10000.0);
+
+        particle.velocity.x -= dx * force * DELTATIME;
+        particle.velocity.y -= dy * force * DELTATIME;
+    } else if *cursor_position != Vec2::new(0., 0.) {
+        // Right Button is being held down
+        let dx = particle.position.x - cursor_position.x as f32;
+        let dy = particle.position.y - cursor_position.y as f32;
+
+        let distance_squared = dx.powi(2) + dy.powi(2);
+
+        let force = (distance_squared * MOUSEATTRACTFORCE.powi(2)).min(10000.0);
+
+        particle.velocity.x += dx * force * DELTATIME;
+        particle.velocity.y += dy * force * DELTATIME;
+    }
 }
 
 fn apply_velocity_step(particle: &mut Particle) {
