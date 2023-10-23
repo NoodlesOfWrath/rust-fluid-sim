@@ -6,9 +6,10 @@ use bevy::{ecs::query, prelude::*, sprite::MaterialMesh2dBundle};
 use nalgebra::Point2;
 use rand::prelude::*;
 use rayon::prelude::*;
-use rstar::{PointDistance, RTree, RTreeObject, AABB};
+use rstar::primitives::CachedEnvelope;
+use rstar::{PointDistance, RStarInsertionStrategy, RTree, RTreeObject, RTreeParams, AABB};
 
-const PARTICLECOUNT: u32 = 8000; // the number of particles to simulate
+const PARTICLECOUNT: u32 = 64000; // the number of particles to simulate
 const PARTICLEREPULSION: f32 = 0.03; //0.04;
 const PARTICLEATTRACTION: f32 = 0.016; // the attraction force between particles aka the y offset of the repulsion function
 const PARTICLEMAXREPULSION: f32 = 10.0; // the maximum repulsion force that can be applied to a particle by another particle
@@ -28,6 +29,15 @@ const STEPSPERFRAME: u32 = 1;
 const DELTATIME: f32 = TIMESTEP / STEPSPERFRAME as f32; // the amount of time to simulate per step
 
 const MOUSEATTRACTFORCE: f32 = 1.0; // the amount of force to attract the particles with
+
+struct Params;
+
+impl RTreeParams for Params {
+    const MIN_SIZE: usize = (PARTICLECOUNT / 2 - 1) as usize;
+    const MAX_SIZE: usize = (PARTICLECOUNT + 2) as usize;
+    const REINSERTION_COUNT: usize = 2;
+    type DefaultInsertionStrategy = RStarInsertionStrategy;
+}
 
 // Create a new type for a particle of water with velocity and position
 #[derive(Copy, Clone, Debug, Component)]
@@ -88,7 +98,7 @@ fn setup_circles(
         // Circle
         commands
             .spawn(MaterialMesh2dBundle {
-                mesh: meshes.add(shape::Circle::new(2.).into()).into(),
+                mesh: meshes.add(shape::Circle::new(1.).into()).into(),
                 material: materials.add(ColorMaterial::from(Color::BLUE)),
                 transform: Transform::from_translation(Vec3::new(0., 0., 0.)),
                 ..default()
@@ -147,7 +157,7 @@ fn update(
 
         // make a copy of the particles to read from in Vec<Particle>
         let read_only_particles: Vec<Particle> = particles
-            .iter()
+            .par_iter()
             .map(|particle| Particle {
                 position: particle.position,
                 velocity: particle.velocity,
@@ -155,8 +165,12 @@ fn update(
             })
             .collect();
 
-        // format the particles into an RTree
-        let particle_tree = RTree::bulk_load(read_only_particles);
+        let read_only_particles: Vec<_> = read_only_particles
+            .par_iter()
+            .map(|&particle| (CachedEnvelope::new(particle)))
+            .collect();
+
+        let particle_tree: RTree<CachedEnvelope<Particle>> = RTree::bulk_load(read_only_particles);
 
         particles.par_iter_mut().for_each(|particle| {
             simulation_step(
@@ -183,7 +197,7 @@ fn set_circle_positions(
 
 fn simulation_step(
     particle: &mut Particle,
-    particle_tree: &RTree<Particle>,
+    particle_tree: &RTree<CachedEnvelope<Particle>>,
     cursor_position: &Vec2,
     is_left_button_pressed: bool,
 ) {
@@ -236,7 +250,10 @@ fn box_repulsion_step(particle: &mut Particle) {
 }
 
 #[inline(never)]
-fn particle_repulsion_step(particle: &mut Particle, particle_tree: &RTree<Particle>) {
+fn particle_repulsion_step(
+    particle: &mut Particle,
+    particle_tree: &RTree<CachedEnvelope<Particle>>,
+) {
     let mut total_force = [0.0, 0.0];
     let repulsion_distance_squared = PARTICLEREPULSIONDISTANCE.powi(2);
     let particles = particle_tree.locate_all_at_point(&[particle.position.x, particle.position.y]);
