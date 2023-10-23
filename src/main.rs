@@ -8,8 +8,8 @@ use rayon::prelude::*;
 use std::num;
 use std::time::{Duration, Instant};
 
-const PARTICLECOUNT: u32 = 32000; // the number of particles to simulate
-const PARTICLEREPULSION: f32 = 0.04;
+const PARTICLECOUNT: u32 = 8000; // the number of particles to simulate
+const PARTICLEREPULSION: f32 = 0.08; //0.04;
 const PARTICLEATTRACTION: f32 = 0.016; // the attraction force between particles aka the y offset of the repulsion function
 const PARTICLEMAXREPULSION: f32 = 10.0; // the maximum repulsion force that can be applied to a particle by another particle
 const PARTICLETERMINALVELOCITY: f32 = 10.0;
@@ -25,8 +25,8 @@ const GRAVITY: f32 = 1.28; // 0.32; // 9.81 / 60.0;
 
 const BOXSEGMENTS: usize = 30; // the number of boxes in each dimension
 
-const TIMESTEP: f32 = 1.0 / 2.0; // the amount of time to simulate per frame
-const STEPSPERFRAME: u32 = 1; // the number of simulation steps to run per frame !!! Not stable for anything but 1 !!!
+const TIMESTEP: f32 = 4.; // the amount of time to simulate per frame
+const STEPSPERFRAME: u32 = 16;
 const DELTATIME: f32 = TIMESTEP / STEPSPERFRAME as f32; // the amount of time to simulate per step
 
 static mut TIMEFORSTEPS: [f32; 8] = [0., 0., 0., 0., 0., 0., 0., 0.];
@@ -93,8 +93,8 @@ fn initialize_positions(mut particleQuery: Query<&mut Particle, With<Particle>>)
     for x in 0..((PARTICLECOUNT as f32).sqrt() as u16) {
         for y in 0..((PARTICLECOUNT as f32).sqrt() as u16) {
             let mut particle = particleQuery.iter_mut().nth(index).unwrap(); // extremely inefficient but only run once
-            particle.position[0] = (((x * 3) as f32) - 500.).into();
-            particle.position[1] = (((y * 3) as f32) - 250.).into();
+            particle.position.x = (((x * 3) as f32) - 500.).into();
+            particle.position.y = (((y * 3) as f32) - 250.).into();
             index += 1;
         }
     }
@@ -194,70 +194,37 @@ fn box_repulsion_step(particle: &mut Particle) {
 }
 
 #[inline(never)]
-fn particle_repulsion_step(
-    particle: &mut Particle,
-    other_particles: &Vec<Mut<'_, Transform>>,
-    index: usize,
-    particle_boxes: &[[Vec<usize>; BOXSEGMENTS]; BOXSEGMENTS],
-) {
-    // find the 5 boxes that are around the particle
-    let [box_x, box_y] = get_box_indices(particle.position[0], particle.position[1]);
-    let boxes_to_check = [
-        [box_x, box_y],
-        [box_x + 1, box_y],
-        [box_x - 1, box_y],
-        [box_x, box_y + 1],
-        [box_x, box_y - 1],
-        [box_x + 1, box_y + 1],
-        [box_x - 1, box_y + 1],
-        [box_x + 1, box_y - 1],
-        [box_x - 1, box_y - 1],
-    ];
+fn particle_repulsion_step(particle: &mut Particle, particle_tree: &RTree<Particle>) {
+    let mut total_force = [0.0, 0.0];
+    let influence_squared = PARTICLESPHEREOFINFLUENCE.powi(2);
+    let repulsion_distance_squared = PARTICLEREPULSIONDISTANCE.powi(2);
+    for other_particle in
+        particle_tree.locate_all_at_point(&[particle.position.x, particle.position.y])
+    {
+        // make sure the particle is not itself
+        if particle.index != other_particle.index {
+            let dx = particle.position.x - other_particle.position.x;
+            let dy = particle.position.y - other_particle.position.y;
 
-    boxes_to_check.iter().for_each(|[box_x, box_y]| {
-        if *box_x > BOXSEGMENTS as i32 - 1
-            || *box_x < 0
-            || *box_y > BOXSEGMENTS as i32 - 1
-            || *box_y < 0
-        {
-            // if the index is outside the box don't do anything
-        } else {
-            let mut total_force: [f32; 2] = [0., 0.];
-            let influence_squared = PARTICLESPHEREOFINFLUENCE.powi(2);
-            let repulsion_distance_squared = PARTICLEREPULSIONDISTANCE.powi(2);
-            particle_boxes[*box_x as usize][*box_y as usize]
-                .iter()
-                .for_each(|other_particle_index| {
-                    if *other_particle_index != index {
-                        let other_particle = &other_particles[*other_particle_index];
-                        let dx = particle.position[0] - other_particle.translation.x;
-                        let dy = particle.position[1] - other_particle.translation.y;
+            let distance_squared = dx * dx + dy * dy;
 
-                        let distance_squared = dx.powi(2) + dy.powi(2);
+            if distance_squared < influence_squared {
+                if distance_squared < 0.01 {
+                    total_force[0] += rand::thread_rng().gen::<f32>() * PARTICLEMAXREPULSION;
+                    total_force[1] += rand::thread_rng().gen::<f32>() * PARTICLEMAXREPULSION;
+                } else {
+                    let force = ((1.0 / (distance_squared * repulsion_distance_squared))
+                        - PARTICLEATTRACTION)
+                        .min(PARTICLEMAXREPULSION);
 
-                        // Check if the particle is not itself
-                        if distance_squared < influence_squared {
-                            if distance_squared < 0.01 {
-                                total_force[0] +=
-                                    rand::thread_rng().gen::<f32>() * PARTICLEMAXREPULSION;
-                                total_force[1] +=
-                                    rand::thread_rng().gen::<f32>() * PARTICLEMAXREPULSION;
-                            } else {
-                                let force = ((1.0
-                                    / (distance_squared * repulsion_distance_squared))
-                                    - PARTICLEATTRACTION)
-                                    .min(PARTICLEMAXREPULSION);
-
-                                total_force[0] += dx * force;
-                                total_force[1] += dy * force;
-                            }
-                        }
-                    }
-                });
-            particle.velocity[0] += total_force[0] * PARTICLEREPULSION as f32 * DELTATIME;
-            particle.velocity[1] += total_force[1] * PARTICLEREPULSION as f32 * DELTATIME;
+                    total_force[0] += dx * force;
+                    total_force[1] += dy * force;
+                }
+            }
         }
-    });
+    }
+    particle.velocity.x += total_force[0] * PARTICLEREPULSION * DELTATIME;
+    particle.velocity.y += total_force[1] * PARTICLEREPULSION * DELTATIME;
 }
 
 fn apply_velocity_step(particle: &mut Particle) {
