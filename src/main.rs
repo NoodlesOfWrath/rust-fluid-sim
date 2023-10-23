@@ -22,8 +22,9 @@ const BOXREPULSION: f32 = 10.0;
 const BOXMAXREPULSION: f32 = 10.0;
 const GRAVITY: f32 = 1.28; // 0.32; // 9.81 / 60.0;
 
+
 const TIMESTEP: f32 = 1.0 / 2.0; // the amount of time to simulate per frame
-const STEPSPERFRAME: u32 = 1; // the number of simulation steps to run per frame !!! Not stable for anything but 1 !!!
+const STEPSPERFRAME: u32 = 1; // the number of simulation steps to run per frame
 const DELTATIME: f32 = TIMESTEP / STEPSPERFRAME as f32; // the amount of time to simulate per step
 
 // Create a new type for a particle of water with velocity and position
