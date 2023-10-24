@@ -353,3 +353,105 @@ fn nearest_point_on_rectangle(point: [f32; 2], rectangle_size: [f32; 2]) -> [f32
         return [point[0], half_height];
     }
 }
+
+#[test]
+fn test_nearest_rectangle() {
+    assert_eq!(
+        nearest_point_on_rectangle([1.0, 0.0], [1000.0, 500.0]),
+        [1.0, -250.0]
+    );
+    assert_eq!(
+        nearest_point_on_rectangle([251.0, 0.0], [1000.0, 500.0]),
+        [500.0, 0.0]
+    );
+    assert_eq!(
+        nearest_point_on_rectangle([0.0, 251.0], [1000.0, 500.0]),
+        [0.0, 250.0]
+    );
+    assert_eq!(
+        nearest_point_on_rectangle([0.0, -251.0], [1000.0, 500.0]),
+        [0.0, -250.0]
+    );
+}
+
+#[test]
+fn test_particle_repulsion() {
+    let mut particle = Particle {
+        position: Point2::new(0.0, 0.0),
+        velocity: Point2::new(0.0, 0.0),
+        index: 0,
+    };
+
+    let mut particles = Vec::new();
+    for i in 0..PARTICLECOUNT {
+        particles.push(Particle {
+            position: Point2::new(0.0, 0.0),
+            velocity: Point2::new(0.0, 0.0),
+            index: i,
+        });
+    }
+
+    let read_only_particles: Vec<Particle> = particles
+        .par_iter()
+        .map(|particle| Particle {
+            position: particle.position,
+            velocity: particle.velocity,
+            index: particle.index,
+        })
+        .collect();
+
+    let read_only_particles: Vec<_> = read_only_particles
+        .par_iter()
+        .map(|&particle| (CachedEnvelope::new(particle)))
+        .collect();
+
+    let particle_tree: RTree<CachedEnvelope<Particle>> = RTree::bulk_load(read_only_particles);
+
+    simulation_step(&mut particle, &particle_tree, &Vec2::new(0., 0.), false);
+
+    assert_eq!(particle.position.x, particle.velocity.x * DELTATIME);
+    assert_eq!(particle.position.y, particle.velocity.y * DELTATIME);
+    assert_ne!(particle.velocity.x, 0.0);
+    assert_ne!(particle.velocity.y, 0.0);
+}
+
+#[test]
+fn test_particle_repulsion_with_cursor() {
+    let mut particle = Particle {
+        position: Point2::new(0.0, 0.0),
+        velocity: Point2::new(0.0, 0.0),
+        index: 0,
+    };
+
+    let mut particles = Vec::new();
+    for i in 0..PARTICLECOUNT {
+        particles.push(Particle {
+            position: Point2::new(0.0, 0.0),
+            velocity: Point2::new(0.0, 0.0),
+            index: i,
+        });
+    }
+
+    let read_only_particles: Vec<Particle> = particles
+        .par_iter()
+        .map(|particle| Particle {
+            position: particle.position,
+            velocity: particle.velocity,
+            index: particle.index,
+        })
+        .collect();
+
+    let read_only_particles: Vec<_> = read_only_particles
+        .par_iter()
+        .map(|&particle| (CachedEnvelope::new(particle)))
+        .collect();
+
+    let particle_tree: RTree<CachedEnvelope<Particle>> = RTree::bulk_load(read_only_particles);
+
+    simulation_step(&mut particle, &particle_tree, &Vec2::new(0., 0.), true);
+
+    assert_eq!(particle.position.x, particle.velocity.x * DELTATIME);
+    assert_eq!(particle.position.y, particle.velocity.y * DELTATIME);
+    assert_ne!(particle.velocity.x, 0.0);
+    assert_ne!(particle.velocity.y, 0.0);
+}
