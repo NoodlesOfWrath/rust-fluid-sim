@@ -211,15 +211,18 @@ fn simulation_step(
     apply_velocity_step(particle);
 }
 
+/// applies drag to the particle
 fn drag_step(particle: &mut Particle) {
     particle.velocity.x *= 1.0 - (PARTICLEDRAG * DELTATIME);
     particle.velocity.y *= 1.0 - (PARTICLEDRAG * DELTATIME);
 }
 
+/// applies gravity to the particle
 fn gravity_step(particle: &mut Particle) {
     particle.velocity.y -= GRAVITY * DELTATIME;
 }
 
+/// bounces the particle off the borders if needed
 fn bounce_step(particle: &mut Particle) {
     if particle.position.x.abs() > BOXSIZE[0] / 2. {
         particle.velocity.x = (-particle.velocity.x) * BOXBOUNCINESS;
@@ -229,8 +232,10 @@ fn bounce_step(particle: &mut Particle) {
     }
 }
 
+/// repulses the particle off of the box
+/// This is to prevent a high density around the boundaries
 fn box_repulsion_step(particle: &mut Particle) {
-    // check if the particle is outside the box
+    // Check if the particle is outside the box
     if particle.position.x.abs() > BOXSIZE[0] / 2. || particle.position.y.abs() > BOXSIZE[1] / 2. {
         return;
     }
@@ -249,6 +254,9 @@ fn box_repulsion_step(particle: &mut Particle) {
         (dy / distance.powi(2)).min(BOXMAXREPULSION) * BOXREPULSION as f32 * DELTATIME;
 }
 
+// inline to enable better performance testing
+/// This is the main part of the simulation.
+/// repulses the particle away from every particle a certain distance of the particle
 #[inline(never)]
 fn particle_repulsion_step(
     particle: &mut Particle,
@@ -258,7 +266,7 @@ fn particle_repulsion_step(
     let repulsion_distance_squared = PARTICLEREPULSIONDISTANCE.powi(2);
     let particles = particle_tree.locate_all_at_point(&[particle.position.x, particle.position.y]);
     for other_particle in particles {
-        // make sure the particle is not itself
+        // Make sure the particle is not itself
         if particle.index != other_particle.index {
             let dx = particle.position.x - other_particle.position.x;
             let dy = particle.position.y - other_particle.position.y;
@@ -282,11 +290,13 @@ fn particle_repulsion_step(
     particle.velocity.y += total_force[1] * PARTICLEREPULSION * DELTATIME;
 }
 
+/// attracts the particles to the cursor if the cursor is pressed down
 fn cursor_attraction_step(
     particle: &mut Particle,
     cursor_position: &Vec2,
     is_left_button_pressed: bool,
 ) {
+    // cursor position must not be exactly 0, 0 or it is undefined.
     if is_left_button_pressed && *cursor_position != Vec2::new(0., 0.) {
         // Left Button is being held down
         let dx = particle.position.x - cursor_position.x as f32;
@@ -312,11 +322,14 @@ fn cursor_attraction_step(
     }
 }
 
+/// apply the velocity to the position of the particle
 fn apply_velocity_step(particle: &mut Particle) {
     particle.position.x += particle.velocity.x * DELTATIME;
     particle.position.y += particle.velocity.y * DELTATIME;
 }
 
+/// make sure the velocity of the particle isn't above a certain amount.
+/// this is to prevent the particles from escaping the box
 fn cap_velocity(particle: &mut Particle) {
     // get the magnitude of the velocity
     let velocity_magnitude = (particle.velocity.x.powi(2) + particle.velocity.y.powi(2)).sqrt();
@@ -326,6 +339,7 @@ fn cap_velocity(particle: &mut Particle) {
     }
 }
 
+/// Find the nearest point on the outline of a rectangle from another point
 fn nearest_point_on_rectangle(point: [f32; 2], rectangle_size: [f32; 2]) -> [f32; 2] {
     let half_width: f32 = rectangle_size[0] / 2 as f32;
     let half_height: f32 = rectangle_size[1] / 2 as f32;
